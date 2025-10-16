@@ -6,10 +6,10 @@
 //
 
 import Foundation
-import CoreData
+internal import CoreData
 
 // MARK: – DTO for portable JSON
-public struct NoteDTO: Codable, Hashable {
+struct NoteDTO: Codable, Hashable {
     public let title: String
     public let content: String
     public let timestamp: Date
@@ -21,7 +21,7 @@ struct NoteKey: Hashable {
 }
 
 // Map Core Data → DTO
-public func makeDTOs(from notes: [Note]) -> [NoteDTO] {
+func makeDTOs(from notes: [Note]) -> [NoteDTO] {
     notes.compactMap { n in
         guard let title = n.title,
               let content = n.content,
@@ -31,14 +31,14 @@ public func makeDTOs(from notes: [Note]) -> [NoteDTO] {
 }
 
 // Fetch all notes with a consistent sort
-public func fetchAllNotes(_ ctx: NSManagedObjectContext) throws -> [Note] {
+func fetchAllNotes(_ ctx: NSManagedObjectContext) throws -> [Note] {
     let req: NSFetchRequest<Note> = Note.fetchRequest()
     req.sortDescriptors = [NSSortDescriptor(keyPath: \Note.timestamp, ascending: false)]
     return try ctx.fetch(req)
 }
 
 // MARK: – FileManager helpers
-public func documentsURL() -> URL {
+func documentsURL() -> URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 }
 
@@ -49,7 +49,7 @@ public func printDocumentsURL() {
 
 // Programmatic export to Documents with timestamped filename
 @discardableResult
-public func exportNotesToDocuments(_ notes: [Note]) throws -> URL {
+func exportNotesToDocuments(_ notes: [Note]) throws -> URL {
     let dtos = makeDTOs(from: notes)
     let data = try JSONEncoder().encode(dtos)
     let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "_")
@@ -60,19 +60,19 @@ public func exportNotesToDocuments(_ notes: [Note]) throws -> URL {
 }
 
 // Decode from Data → [DTO]
-public func decodeNoteDTOs(from data: Data) throws -> [NoteDTO] {
+func decodeNoteDTOs(from data: Data) throws -> [NoteDTO] {
     try JSONDecoder().decode([NoteDTO].self, from: data)
 }
 
 // Import from URL → Core Data
-public func importNotes(from url: URL, into ctx: NSManagedObjectContext, replace: Bool) throws {
+func importNotes(from url: URL, into ctx: NSManagedObjectContext, replace: Bool) throws {
     let data = try Data(contentsOf: url)
     let dtos = try decodeNoteDTOs(from: data)
     try importNotes(from: dtos, into: ctx, replace: replace)
 }
 
 // Import from DTOs → Core Data (replace or merge)
-public func importNotes(from dtos: [NoteDTO], into ctx: NSManagedObjectContext, replace: Bool) throws {
+func importNotes(from dtos: [NoteDTO], into ctx: NSManagedObjectContext, replace: Bool) throws {
     if replace {
         try deleteAllNotes(in: ctx)
     }
@@ -98,12 +98,19 @@ public func importNotes(from dtos: [NoteDTO], into ctx: NSManagedObjectContext, 
 }
 
 // Delete all notes (batch delete)
-public func deleteAllNotes(in ctx: NSManagedObjectContext) throws {
+func deleteAllNotes(in ctx: NSManagedObjectContext) throws {
     let f: NSFetchRequest<NSFetchRequestResult> = Note.fetchRequest()
     let d = NSBatchDeleteRequest(fetchRequest: f)
-    try ctx.execute(d)
+    d.resultType = .resultTypeObjectIDs
+    
+    let result = try ctx.execute(d) as? NSBatchDeleteResult
+    if let objectIDs = result?.result as? [NSManagedObjectID] {
+        let changes = [NSDeletedObjectsKey: objectIDs]
+        NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [ctx])
+    }
+    
     try ctx.save()
-    print("🗑️ All notes deleted.")
+    print("🗑️ All notes deleted and UI refreshed.")
 }
 
 // Build a dedupe key for a Note

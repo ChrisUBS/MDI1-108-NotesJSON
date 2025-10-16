@@ -6,86 +6,132 @@
 //
 
 import SwiftUI
+internal import CoreData
+import UniformTypeIdentifiers
 
 struct NotesView_WithExportImport: View {
+    @Environment(\.managedObjectContext) private var ctx
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \Note.timestamp, ascending: false)],
+        animation: .default
+    ) private var notes: FetchedResults<Note>
+    
     @State private var searchText = ""
+    @State private var showingNewNote = false
+    @State private var showingImporter = false
+    @State private var exportFile: JSONFile?
+    @State private var replaceMode = true
+    @State private var selectedNote: Note?
+
+    var filteredNotes: [Note] {
+        if searchText.isEmpty { return Array(notes) }
+        return notes.filter {
+            ($0.title?.localizedCaseInsensitiveContains(searchText) ?? false) ||
+            ($0.content?.localizedCaseInsensitiveContains(searchText) ?? false)
+        }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
+                ForEach(filteredNotes) { note in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Note 1")
+                        Text(note.title ?? "(No title)")
                             .font(.headline)
-                        Text("Hello!")
+                        Text(note.content ?? "")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        Text("14 Oct 2025 at 7:40 p.m.")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
+                        if let ts = note.timestamp {
+                            Text(ts.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+                        }
                     }
                     .padding(2)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Note 2")
-                            .font(.headline)
-                        Text("Hello!")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Text("14 Oct 2025 at 7:40 p.m.")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
+                    .onTapGesture {
+                        selectedNote = note
                     }
-                    .padding(2)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Note 3")
-                            .font(.headline)
-                        Text("Hello!")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Text("14 Oct 2025 at 7:40 p.m.")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                    }
-                    .padding(2)
                 }
+                .onDelete(perform: deleteNotes)
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Notes + JSON")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        print("gear")
+                    Menu {
+                        Button(role: .destructive) {
+                            try? deleteAllNotes()
+                        } label: {
+                            Label("Delete All Notes", systemImage: "trash")
+                        }
+                        
+                        Picker("Import Mode", selection: $replaceMode) {
+                            Text("Replace (wipe then import)").tag(true)
+                            Text("Merge (avoid duplicates)").tag(false)
+                        }
                     } label: {
                         Image(systemName: "gearshape")
                     }
                 }
                 
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    Button {
-                        print("export")
-                    } label: {
+                    Button { exportNotes() } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
-
-                    Button {
-                        print("import")
-                    } label: {
+                    Button { showingImporter = true } label: {
                         Image(systemName: "square.and.arrow.down")
                     }
-
-                    Button {
-                        print("add")
-                    } label: {
+                    Button { showingNewNote = true } label: {
                         Image(systemName: "plus.circle.fill")
                     }
                 }
             }
             .searchable(text: $searchText, prompt: "Search title or content")
+            .sheet(isPresented: $showingNewNote) {
+                NewNoteView()
+                    .environment(\.managedObjectContext, ctx)
+            }
+            .sheet(item: $selectedNote) { note in 
+                EditNoteView(note: note)
+                    .environment(\.managedObjectContext, ctx)
+            }
+            .fileExporter(isPresented: Binding<Bool>(
+                get: { exportFile != nil },
+                set: { if !$0 { exportFile = nil } }
+            ), document: exportFile, contentType: .json, defaultFilename: "notes.json") { result in
+                if case .success(let url) = result {
+                    print("✅ Exported to \(url)")
+                }
+            }
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
+                if case .success(let url) = result {
+                    try? importNotes(from: url, into: ctx, replace: replaceMode)
+                }
+            }
+        }
+    }
+    
+    private func deleteNotes(offsets: IndexSet) {
+        for index in offsets {
+            ctx.delete(filteredNotes[index])
+        }
+        try? ctx.save()
+    }
+    
+    private func deleteAllNotes() throws {
+        try MDI1_108_NotesJSON.deleteAllNotes(in: ctx)
+    }
+    
+    private func exportNotes() {
+        if let notes = try? fetchAllNotes(ctx),
+           let data = try? JSONEncoder().encode(makeDTOs(from: notes)) {
+            exportFile = JSONFile(data: data)
         }
     }
 }
 
 #Preview {
     NotesView_WithExportImport()
+        .environment(\.managedObjectContext, PersistenceController.shared.container.viewContext)
         .preferredColorScheme(.dark)
 }

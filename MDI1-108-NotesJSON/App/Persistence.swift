@@ -5,7 +5,7 @@
 //  Created by Christian Bonilla on 14/10/25.
 //
 
-import CoreData
+internal import CoreData
 
 final class PersistenceController {
     static let shared = PersistenceController()
